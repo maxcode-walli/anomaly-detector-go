@@ -1,4 +1,4 @@
-module example.com/cloudfunction
+module example.com/anomdetect
 
 go 1.20
 
