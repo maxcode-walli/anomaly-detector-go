@@ -23,6 +23,13 @@ func main() {
 
 	err = sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
 		fmt.Println(">>> Received message: ", string(msg.Data))
+		eventType := msg.Attributes["pigeon.eventType"]
+
+		if eventType != "walli.TransactionUpdatedEventV1" {
+			log.Println("Missing or inccorrect attribute value for pigeon.eventType")
+			msg.Ack()
+			return
+		}
 
 		msg.Ack()
 		var transaction Transaction
@@ -89,7 +96,8 @@ func getLabel(score float32) string {
 }
 
 type PubSubMessage struct {
-	Data []byte `json:"data"`
+	Data       []byte            `json:"data"`
+	Attributes map[string]string `json:"attributes"`
 }
 
 // HelloPubSub consumes a Pub/Sub message.
@@ -97,6 +105,12 @@ func HelloPubSub(ctx context.Context, m PubSubMessage) error {
 	var transaction Transaction
 	_ = json.Unmarshal(m.Data, &transaction)
 	log.Println(fmt.Sprintf("Received: %s", m.Data))
+
+	eventType := m.Attributes["pigeon.eventType"]
+	if eventType != "walli.TransactionUpdatedEventV1" {
+		log.Panic()
+		return fmt.Errorf("Unfit attribute value for pigeon.eventType: %s", eventType)
+	}
 
 	//Step 1 - Get User
 	//Step 2 - Calculate anomaly score
