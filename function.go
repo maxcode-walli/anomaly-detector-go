@@ -1,20 +1,93 @@
-// Package p contains a Pub/Sub Cloud Function.
-package p
+package main
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	frauddetector "github.com/aws/aws-sdk-go-v2/service/frauddetector"
-	"github.com/aws/aws-sdk-go-v2/service/frauddetector/types"
+	"cloud.google.com/go/pubsub"
 )
 
-// PubSubMessage is the payload of a Pub/Sub event. Please refer to the docs for
-// additional information regarding Pub/Sub events.
+func main() {
+	// Set up a Google Cloud Pub/Sub client
+	ctx := context.Background()
+	client, err := pubsub.NewClient(ctx, "impactful-shard-374913")
+	if err != nil {
+		fmt.Println("Failed to create client: ", err)
+		return
+	}
+	// Set up a subscription to the topic
+	sub := client.Subscription("SubForAnomalyDetector")
+	fmt.Println("Listening ...")
+
+	err = sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+		fmt.Println(">>> Received message: ", string(msg.Data))
+
+		msg.Ack()
+		var transaction Transaction
+		_ = json.Unmarshal(msg.Data, &transaction)
+
+		user := getUser(ctx, transaction.UserID)
+
+		log.Println("Sending to AnomalyDetector:")
+		log.Println(fmt.Sprintf("\tTransaction uuid: %s\n\tAmount: %d\n\tEmail: %s\n\tJob: %s", transaction.Uuid, transaction.TransactionAmount.Amount, user.Email, user.Job))
+
+		predict, error := calculateAnomalyScore(ctx, transaction, user.Job, user.Email)
+
+		if error != nil {
+			log.Panic(fmt.Printf("Error in anomaly detector\n\terror: %v\n", error))
+			return
+		} else {
+
+			log.Println(fmt.Printf("Step 2 - Prediction results for: { Amount: %d, Email: %s, Job:%s }", transaction.TransactionAmount.Amount, user.Email, user.Job))
+
+			for key, element := range predict.ModelScores[0].Scores {
+				fmt.Println("\t(", key, " => ", element, ")")
+				score := element
+				label := getLabel(score)
+
+				transactionScore := struct {
+					TransactionID     string
+					UserID            string
+					ExternalAccountID string
+					Label             string
+					Score             float32
+				}{
+					TransactionID:     transaction.Uuid,
+					UserID:            transaction.UserID,
+					ExternalAccountID: transaction.ExternalAccountID,
+					Label:             label,
+					Score:             score,
+				}
+
+				attributes := map[string]string{"pigeon.eventType": "walli.TransactionAnomalyScoreCalculatedEventV1"}
+
+				publishMessage("TransactionScores", transactionScore, attributes)
+				log.Println("Step 3 - Published Message")
+			}
+		}
+	})
+
+	fmt.Println("Listening ...")
+	if err != nil {
+		fmt.Println("Failed to start subscription: ", err)
+		return
+	}
+
+	fmt.Println("Listening ...")
+}
+
+func getLabel(score float32) string {
+	if score >= 800 {
+		return "High risk"
+	}
+	if score >= 400 && score < 800 {
+		return "Unusual"
+	}
+	return "Legit"
+}
+
 type PubSubMessage struct {
 	Data []byte `json:"data"`
 }
@@ -33,51 +106,16 @@ func HelloPubSub(ctx context.Context, m PubSubMessage) error {
 	log.Println("Step1 - Get user:")
 	log.Println(user)
 
-	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion("eu-west-1"))
+	predict, error := calculateAnomalyScore(ctx, transaction, user.Job, user.Email)
 
-	if err != nil {
-		log.Panic("ERROR config")
-	}
-
-	client := frauddetector.NewFromConfig(cfg)
-
-	entityId := "anomaly_detector_1"
-	entityType := "anomaly_detector_1"
-	detectorId := "anomaly_detector"
-	timestamp := "2023-03-13T11:00:00Z"
-	detectorVersionId := "1"
-
-	entities := []types.Entity{{
-		EntityId:   &entityId,
-		EntityType: &entityType,
-	}}
-	eventVariables := map[string]string{
-		"amount":             strconv.Itoa(int(transaction.TransactionAmount.Amount)),
-		"job":                user.Job,
-		"user_email_address": user.Email,
-	}
-
-	eventInput := frauddetector.GetEventPredictionInput{
-		DetectorId:                     &detectorId,
-		Entities:                       entities,
-		EventId:                        &transaction.Uuid,
-		EventTimestamp:                 &timestamp,
-		EventTypeName:                  &entityType,
-		EventVariables:                 eventVariables,
-		DetectorVersionId:              &detectorVersionId,
-		ExternalModelEndpointDataBlobs: map[string]types.ModelEndpointDataBlob{},
-	}
-
-	pred, err := client.GetEventPrediction(ctx, &eventInput)
-
-	if err != nil {
-		return err
-	}
-
-	log.Println("Step2 - Get Prediction:")
-
-	for key, element := range pred.ModelScores[0].Scores {
-		fmt.Println("Key:", key, "=>", "Element:", element)
+	if error != nil {
+		log.Panic("Error in anomaly detector")
+		return error
+	} else {
+		log.Println("Step2 - Get Prediction:")
+		for key, element := range predict.ModelScores[0].Scores {
+			fmt.Println("Key:", key, "=>", "Element:", element)
+		}
 	}
 
 	log.Println("Step3 - Publish Message: (TODO)")
