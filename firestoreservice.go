@@ -1,4 +1,4 @@
-package p
+package main
 
 import (
 	"context"
@@ -13,44 +13,53 @@ var (
 	client *firestore.Client
 )
 
-func getUser(ctx context.Context, userId string) User {
-	var user User
+func getUser(ctx context.Context, userId string) (a AccountUser) {
+	userData := AccountUser{
+		Uid:           userId,
+		EmailVerified: false,
+	}
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: "impactful-shard-374913"})
 	if err != nil {
 		log.Panic("Error creating firebase app")
-		return user
+		return userData
 	}
-
 	client, err = app.Firestore(ctx)
 	if err != nil {
 		log.Panic("Error initializing firestore client")
-		return user
+		return userData
 	} else {
+		var user, e = client.Doc("users/" + userId).Get(ctx)
+		if e != nil {
+			log.Panic("cannot read firestore user")
+		}
+
+		m := user.Data()
+		log.Println(fmt.Printf("Have read: \tuser.data():%#v", m))
+
 		err := client.RunTransaction(ctx, func(ctx context.Context, transaction *firestore.Transaction) error {
+			ref := client.Collection("users").Doc(userId)
+			us, err := transaction.Get(ref)
 
-			account := client.Collection("users").Where("uid", "==", userId).Documents(ctx)
-
-			accountDoc, err := account.Next()
 			if err != nil {
-				log.Panic(fmt.Sprintf("no user found with Uid: %s", userId))
-				return err
+				log.Panic(fmt.Printf("User with ref %s not found", userId))
+				return nil
+				//try reading without transaction : us, err := client.Collection("users").Doc(userId).Get(ctx)
+
+			} else {
+				var dbUser AccountUser
+				us.DataTo(&dbUser)
+				userData.Email = dbUser.Email
+				userData.Job = dbUser.Job
+
+				return nil
 			}
-
-			var userData User
-			if err := accountDoc.DataTo(&userData); err != nil {
-				log.Panic("could not cast firestore document to User struct")
-				return err
-			}
-
-			user.Email = userData.Email
-			user.Job = userData.Job
-
-			return nil
 		})
 		if err != nil {
-			log.Panic("Error transaction - read user from db")
-			return user
+			log.Panic("Error in updating user data from Firestore")
+		} else {
+			log.Println(fmt.Printf("Success updating user data:\t[email=%s]\tjob=%s]", userData.Email, userData.Job))
 		}
+
+		return userData
 	}
-	return user
 }
