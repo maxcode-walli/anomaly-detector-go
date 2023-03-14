@@ -107,9 +107,9 @@ func HelloPubSub(ctx context.Context, m PubSubMessage) error {
 	log.Println(fmt.Sprintf("Received: %s", m.Data))
 
 	eventType := m.Attributes["pigeon.eventType"]
+
 	if eventType != "walli.TransactionUpdatedEventV1" {
-		log.Panic()
-		return fmt.Errorf("Unfit attribute value for pigeon.eventType: %s", eventType)
+		return fmt.Errorf("Missing or inccorrect attribute value for pigeon.eventType %s", eventType)
 	}
 
 	//Step 1 - Get User
